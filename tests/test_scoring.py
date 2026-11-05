@@ -25,4 +25,4 @@ assert fielding_points(3, 0, 0, 0) == 28
 # Captain: (58 + 4) x 2 = 124
 assert final_points(58, True, True, False) == 124
 
-print("All tests passed")
+print("All tests passed")  

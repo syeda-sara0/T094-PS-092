@@ -33,3 +33,22 @@ Example: (58 + 4) x 2 = 124.
 
 ## D-08 Credits and money (planned)
 Credits will use Decimal. Money will use whole paise.
+
+## D-09 Few entries in a contest
+If there are fewer entries than prize ranks, the percent of the unused ranks
+is spread over the ranks that exist. Example: 1 entry wins the whole pool.
+
+## D-10 Ties
+Tied entries share the same rank (1, 2, 2, 2, 5).
+The prizes of all ranks the tie covers are added, then split equally.
+Extra paise go to the earliest submission, one paisa each.
+
+## D-11 Band percent
+Each band stores the TOTAL percent. Ranks 4-10 at 3% each is stored as 21.
+
+## D-12 Abandoned match
+Total legal balls of both innings below 120 (20 overs) means cancelled and refunded.
+
+## D-13 TDS
+TDS = 30% of positive cumulative net winnings, minus TDS already deducted.
+Payouts are processed in time order.
