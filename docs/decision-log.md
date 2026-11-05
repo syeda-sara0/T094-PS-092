@@ -52,3 +52,21 @@ Total legal balls of both innings below 120 (20 overs) means cancelled and refun
 ## D-13 TDS
 TDS = 30% of positive cumulative net winnings, minus TDS already deducted.
 Payouts are processed in time order.
+
+## D-14 Entry lock
+An entry is accepted if it is submitted at or before match start minus 1 minute.
+One second later is rejected. An edit after the lock is rejected.
+
+## D-15 Substitute (brief BR-02 is not detailed)
+A listed player who did not play is replaced by the announced substitute at 0.5 weight.
+If the substitute is already in the same team, the replaced slot gives 0, so he is not counted twice.
+TO CHECK against the Week 2 sample output: does the substitute get the +4 playing-XI bonus,
+and does a captain or vice-captain multiplier move to the substitute?
+
+## D-16 Credits
+Credits use Decimal. A team with exactly 100.0 credits is valid.
+Exactly 7 players from one real team is valid.
+
+## D-17 Ties
+Default is to share the combined prize equally (brief BR-08).
+The tie-break by earlier submission is needed only when tie-splitting is switched off. TO BUILD LATER.
