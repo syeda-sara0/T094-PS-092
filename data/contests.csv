@@ -1,0 +1,4 @@
+contest_id,match_id,contest_name,entry_fee,max_entries,guaranteed,guaranteed_pool,max_teams_per_user,tie_split
+CT-01,MT-01,Mega Contest,49.00,500,false,0.00,6,true
+CT-02,MT-02,Weekend Warriors,99.00,300,true,15000.00,6,false
+CT-03,MT-02,Head-to-Head Guaranteed,499.00,2,true,1000.00,1,true

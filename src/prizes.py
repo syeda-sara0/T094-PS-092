@@ -1,117 +1,114 @@
+"""Prize pool, rank bands and tie splitting (BR-08, BR-09, BR-10, BR-12).
+
+All money is whole paise. Percentages are exact Fractions.
+"""
+import math
+from dataclasses import dataclass
 from fractions import Fraction
 
 PLATFORM_FEE_PERCENT = 15
-TDS_PERCENT = 30
-MIN_BALLS_FOR_VALID_MATCH = 120  # 20 overs x 6 balls
-
-# (first_rank, last_rank, TOTAL percent of the whole band)
-# Example: ranks 4-10 with 3% each = 21% for the band.
-DEFAULT_BANDS = [
-    (1, 1, 25),
-    (2, 2, 15),
-    (3, 3, 10),
-    (4, 10, 21),
-    (11, 100, 29),
-]
+MIN_LEGAL_BALLS = 120          # 20 overs
+PERCENT_TOLERANCE = Fraction(1, 1000)   # the CSV has 6 decimals, so allow a tiny gap
 
 
 def validate_bands(bands):
-    """Bands must start at rank 1, have no gaps, and add up to 100 percent."""
+    """Returns None if fine, else a reason. Bands must start at rank 1,
+    have no gaps, and add up to 100 percent."""
+    if not bands:
+        return "NO_PRIZE_BANDS"
+    expected = 1
     total = Fraction(0)
-    expected_first = 1
-    for first, last, percent in bands:
-        if first != expected_first or last < first:
-            raise ValueError("Bands must start at rank 1 with no gaps or overlaps")
-        if percent < 0:
-            raise ValueError("Percent cannot be negative")
-        total += Fraction(percent)
-        expected_first = last + 1
-    if total != 100:
-        raise ValueError("Band percentages must add up to 100")
-    return True
+    for band in sorted(bands, key=lambda b: b.rank_from):
+        if band.rank_from != expected or band.rank_to < band.rank_from:
+            return "BANDS_NOT_CONTIGUOUS"
+        total += band.pct_per_rank * (band.rank_to - band.rank_from + 1)
+        expected = band.rank_to + 1
+    if abs(total - 100) > PERCENT_TOLERANCE:
+        return "PERCENT_NOT_100"
+    return None
 
 
-def prize_pool(entry_fee, num_entries, guaranteed=None):
-    """All money is in whole paise. Returns status, pool and subsidy."""
-    collected = entry_fee * num_entries
-    actual = collected * (100 - PLATFORM_FEE_PERCENT) // 100
-
-    if guaranteed is None:
-        if num_entries < 2:
-            return {"status": "CANCELLED", "pool": 0, "subsidy": 0}
-        return {"status": "OK", "pool": actual, "subsidy": 0}
-
-    if num_entries < 1:
-        return {"status": "CANCELLED", "pool": 0, "subsidy": 0}
-    pool = max(actual, guaranteed)
-    subsidy = max(guaranteed - actual, 0)  # printed as PLATFORM_SUBSIDY
-    return {"status": "OK", "pool": pool, "subsidy": subsidy}
-
-
-def is_abandoned(total_legal_balls):
+def is_abandoned(legal_balls):
     """Fewer than 20 overs in total means abandoned."""
-    return total_legal_balls < MIN_BALLS_FOR_VALID_MATCH
+    return legal_balls < MIN_LEGAL_BALLS
 
 
-def rank_prize(rank, pool, bands):
-    """Prize for one rank, as an exact fraction."""
-    for first, last, percent in bands:
-        if first <= rank <= last:
-            return Fraction(pool) * Fraction(percent) / 100 / (last - first + 1)
-    return Fraction(0)
+@dataclass(frozen=True)
+class Pool:
+    status: str      # OK or CANCELLED
+    pool: int        # paise
+    subsidy: int     # paise (PLATFORM_SUBSIDY)
+    collected: int   # paise of entry fees
 
 
-def tie_groups(entries):
-    """entries = list of (entry_id, score, submit_order).
-    Returns a list of (first_rank, [tied entries]) from best to worst.
-    Tied entries share the same first rank, so ranks go 1, 2, 2, 2, 5."""
-    ordered = sorted(entries, key=lambda e: (-e[1], e[2]))
-    groups = []
-    position = 1
-    i = 0
-    while i < len(ordered):
-        j = i
-        while j < len(ordered) and ordered[j][1] == ordered[i][1]:
-            j += 1
-        groups.append((position, ordered[i:j]))
-        position += j - i
-        i = j
-    return groups
+def prize_pool(contest, num_entries):
+    collected = contest.entry_fee * num_entries
+    net = collected * (100 - PLATFORM_FEE_PERCENT) // 100
+    if contest.guaranteed:
+        if num_entries < 1:
+            return Pool("CANCELLED", 0, 0, collected)
+        return Pool("OK", max(contest.guaranteed_pool, net),
+                    max(contest.guaranteed_pool - net, 0), collected)
+    if num_entries < 2:
+        return Pool("CANCELLED", 0, 0, collected)
+    return Pool("OK", net, 0, collected)
 
 
-def distribute(pool, entries, bands=DEFAULT_BANDS):
-    """Returns {entry_id: (rank, prize_in_paise)}.
-    A tied group adds up the prizes of all the ranks it covers and splits
-    the total equally. Extra paise go to the earliest submissions."""
-    groups = tie_groups(entries)
-    n = len(entries)
-
-    # If there are fewer entries than prize ranks, the unused percent
-    # is spread over the ranks that exist (decision D-09).
-    total_raw = sum(rank_prize(r, pool, bands) for r in range(1, n + 1))
-    scale = Fraction(pool) / total_raw if total_raw else Fraction(0)
-
-    result = {}
-    for start, members in groups:
-        size = len(members)
-        group_total = sum(
-            rank_prize(r, pool, bands) for r in range(start, start + size)
-        ) * scale
-        share = int(group_total / size)          # rounded down to the paise
-        leftover = int(group_total) - share * size
-        for index, member in enumerate(members):
-            extra = 1 if index < leftover else 0
-            result[member[0]] = (start, share + extra)
-    return result
+def rank_prizes(pool, bands, num_ranks):
+    """Prize in paise for rank 1..num_ranks, each rounded down to the paisa.
+    If there are fewer entries than prize ranks, the share of the empty ranks
+    is given to the filled ranks in proportion to their percentages."""
+    pct = []
+    for band in sorted(bands, key=lambda b: b.rank_from):
+        pct.extend([band.pct_per_rank] * (band.rank_to - band.rank_from + 1))
+    total_pct = sum(pct, Fraction(0))
+    filled = pct[:num_ranks]
+    filled_pct = sum(filled, Fraction(0))
+    if filled_pct == 0:
+        return [0] * num_ranks
+    scale = total_pct / filled_pct
+    prizes = [math.floor(Fraction(pool) * p / 100 * scale) for p in filled]
+    return prizes + [0] * (num_ranks - len(prizes))
 
 
-def tds_for_payout(total_winnings, total_fees, tds_already_deducted):
-    """Cumulative TDS. 30 percent of positive net winnings,
-    minus the TDS already taken before."""
-    net = total_winnings - total_fees
-    due_in_total = max(net, 0) * TDS_PERCENT // 100
-    return max(due_in_total - tds_already_deducted, 0)
+@dataclass(frozen=True)
+class Standing:
+    rank: int
+    entry_id: str
+    points: Fraction
+    submitted_ts: str
+    prize: int      # paise
 
 
-def rupees(paise):
-    return f"{paise // 100}.{paise % 100:02d}"
+def distribute(pool, bands, entries, tie_split):
+    """entries: list of (entry_id, points, submitted_ts_text, submitted_dt).
+    Returns Standing rows ordered by rank.
+
+    tie_split True : tied entries share the rank, the prizes of all ranks the
+                     tie covers are added and split equally, rounded down to the
+                     paisa, the left-over paise go to the earliest submission.
+    tie_split False: ties are broken by earlier submission, every entry gets
+                     its own rank and its own prize."""
+    ordered = sorted(entries, key=lambda e: (-e[1], e[3], e[0]))
+    prizes = rank_prizes(pool, bands, len(ordered))
+    rows = []
+    if not tie_split:
+        for index, (eid, points, ts_text, _) in enumerate(ordered):
+            rows.append(Standing(index + 1, eid, points, ts_text, prizes[index]))
+        return rows
+
+    start = 0
+    while start < len(ordered):
+        end = start
+        while end < len(ordered) and ordered[end][1] == ordered[start][1]:
+            end += 1
+        size = end - start
+        combined = sum(prizes[start:end])
+        share = combined // size
+        residue = combined - share * size
+        for offset in range(size):
+            eid, points, ts_text, _ = ordered[start + offset]
+            prize = share + (residue if offset == 0 else 0)
+            rows.append(Standing(start + 1, eid, points, ts_text, prize))
+        start = end
+    return rows

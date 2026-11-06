@@ -1,49 +1,97 @@
-import sys
-sys.path.insert(0, "src")
-
+import unittest
+from fractions import Fraction
 from datetime import datetime
-from decimal import Decimal
-from teams import (validate_team, can_add_entry, entry_open,
-                   substitute_slot_points)
 
-ROLES = ["WK", "BAT", "BAT", "BAT", "BAT", "AR", "AR",
-         "BOWL", "BOWL", "BOWL", "BOWL"]
+import helpers
+from helpers import player
+import teams
+from scoring import PlayerPoints
+from loader import Lineup
 
-
-def make_team(credits, teams):
-    return [{"id": f"P{i}", "team": teams[i], "role": ROLES[i],
-             "credit": credits[i]} for i in range(11)]
+ROLES = ["WK", "BAT", "BAT", "BAT", "BAT", "AR", "AR", "BOWL", "BOWL", "BOWL", "BOWL"]
 
 
-CREDITS_100 = ["10.0"] + ["9.0"] * 10          # adds up to exactly 100.0
-SEVEN_ONE_TEAM = ["A"] * 7 + ["B"] * 4
+def make_pool(credits, team_codes):
+    return {f"P{i}": player(f"P{i}", team_codes[i], ROLES[i], credits[i]) for i in range(11)}
 
-# Edge case: credits exactly 100.0 and 7 players from one team -> valid
-assert validate_team(make_team(CREDITS_100, SEVEN_ONE_TEAM), "P0", "P1") == []
 
-# 100.1 credits -> invalid
-over = ["10.1"] + ["9.0"] * 10
-assert len(validate_team(make_team(over, SEVEN_ONE_TEAM), "P0", "P1")) == 1
+EXACT_100 = ["10.0"] + ["9.0"] * 10
+SEVEN_AND_FOUR = ["A"] * 7 + ["B"] * 4
+IDS = [f"P{i}" for i in range(11)]
 
-# 8 players from one team -> invalid
-eight = ["A"] * 8 + ["B"] * 3
-assert len(validate_team(make_team(CREDITS_100, eight), "P0", "P1")) == 1
 
-# Captain and vice-captain must be different
-assert len(validate_team(make_team(CREDITS_100, SEVEN_ONE_TEAM), "P0", "P0")) == 1
+class ValidationTests(unittest.TestCase):
+    def check(self, pool, captain="P0", vice="P1", ids=IDS):
+        return teams.validate_team(ids, captain, vice, pool, ("A", "B"))
 
-# Up to 6 teams per user per contest
-assert can_add_entry(5) is True
-assert can_add_entry(6) is False
+    def test_edge_credits_exactly_100_and_seven_from_one_team(self):
+        self.assertIsNone(self.check(make_pool(EXACT_100, SEVEN_AND_FOUR)))
 
-# Entries close 1 minute before the match start
-start = datetime(2026, 11, 10, 19, 0, 0)
-assert entry_open(datetime(2026, 11, 10, 18, 59, 0), start) is True
-assert entry_open(datetime(2026, 11, 10, 18, 59, 1), start) is False
+    def test_credits_over_100(self):
+        pool = make_pool(["10.1"] + ["9.0"] * 10, SEVEN_AND_FOUR)
+        self.assertEqual(self.check(pool), "CREDITS_EXCEEDED")
 
-# Substitute counts at 0.5 weight
-assert substitute_slot_points(60, False) == Decimal("30")
-# Edge case: substitute already in the team -> this slot gives 0
-assert substitute_slot_points(60, True) == Decimal("0")
+    def test_eight_from_one_team(self):
+        pool = make_pool(EXACT_100, ["A"] * 8 + ["B"] * 3)
+        self.assertEqual(self.check(pool), "TOO_MANY_FROM_ONE_TEAM")
 
-print("All team tests passed")
+    def test_captain_and_vice_must_differ_and_be_in_team(self):
+        pool = make_pool(EXACT_100, SEVEN_AND_FOUR)
+        self.assertEqual(self.check(pool, "P0", "P0"), "CAPTAIN_VICE_INVALID")
+        self.assertEqual(self.check(pool, "P0", "P99"), "CAPTAIN_VICE_INVALID")
+
+    def test_team_size_duplicates_unknown_and_other_team(self):
+        pool = make_pool(EXACT_100, SEVEN_AND_FOUR)
+        self.assertEqual(self.check(pool, ids=IDS[:10]), "TEAM_SIZE_INVALID")
+        self.assertEqual(self.check(pool, ids=IDS[:10] + ["P0"]), "DUPLICATE_PLAYER")
+        self.assertEqual(self.check(pool, ids=IDS[:10] + ["PX"]), "UNKNOWN_PLAYER")
+        pool["P3"] = player("P3", "C", "BAT", "9.0")
+        self.assertEqual(self.check(pool), "PLAYER_NOT_IN_MATCH")
+
+    def test_role_limits(self):
+        pool = make_pool(EXACT_100, SEVEN_AND_FOUR)
+        pool["P1"] = player("P1", "A", "WK", "9.0")   # now 2 WK, 3 BAT -> still valid
+        self.assertIsNone(self.check(pool))
+        for pid in ("P1", "P2", "P3"):                 # only 1 BAT left -> invalid
+            pool[pid] = player(pid, "A", "WK", "9.0")
+        self.assertEqual(self.check(pool), "ROLE_LIMIT_VIOLATED")
+
+    def test_lock_time_is_one_minute_before_start(self):
+        start = datetime(2026, 10, 17, 19, 30, 0)
+        self.assertEqual(teams.lock_time(start), datetime(2026, 10, 17, 19, 29, 0))
+
+
+def pts(total):
+    f = Fraction(total)
+    return PlayerPoints("M", "x", 0, 0, 0, 0, f, f * 0, 0, f * 0, f * 0, f * 0, f * 0, f)
+
+
+class ScoreTests(unittest.TestCase):
+    def test_xi_bonus_before_multiplier(self):
+        # the +4 is already inside the player's total: (58 + 4) x 2 = 124
+        points = {"A": pts(62), "B": pts(10)}
+        self.assertEqual(teams.team_score(["A", "B"], "A", "B", points, {}), 124 + 15)
+
+    def test_vice_captain_1_5(self):
+        points = {"A": pts(10), "B": pts(10)}
+        self.assertEqual(teams.team_score(["A", "B"], "A", "B", points, {}), Fraction(35))
+
+    def test_edge_substitute_not_in_team_gets_half(self):
+        points = {"OLD": pts(0), "SUB": pts(12), "Z": pts(10)}
+        subs = {"OLD": "SUB"}
+        self.assertEqual(teams.team_score(["OLD", "Z"], "Z", "OLD", points, subs),
+                         Fraction(20) + Fraction(3, 2) * Fraction(6))
+
+    def test_edge_substitute_already_in_team_gives_zero_for_listed_player(self):
+        points = {"OLD": pts(0), "SUB": pts(12), "Z": pts(10)}
+        subs = {"OLD": "SUB"}
+        self.assertEqual(teams.team_score(["OLD", "SUB"], "Z", "SUB", points, subs),
+                         Fraction(12) * Fraction(3, 2))
+
+    def test_substitute_map(self):
+        rows = [Lineup("M", "A", "P1", True, ""), Lineup("M", "A", "P2", True, "P1")]
+        self.assertEqual(teams.substitute_map(rows), {"P1": "P2"})
+
+
+if __name__ == "__main__":
+    unittest.main()

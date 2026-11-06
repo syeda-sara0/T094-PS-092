@@ -1,64 +1,81 @@
-from decimal import Decimal
+"""Team rules (BR-01, BR-02) and team scoring (BR-07).
+
+validate_team() returns None when the team is fine, otherwise a reason code.
+"""
 from datetime import timedelta
+from decimal import Decimal
+from fractions import Fraction
 
 MAX_CREDITS = Decimal("100.0")
 TEAM_SIZE = 11
 MAX_FROM_ONE_TEAM = 7
-MAX_TEAMS_PER_USER = 6
-# role: (minimum, maximum)
 ROLE_LIMITS = {"WK": (1, 4), "BAT": (3, 6), "AR": (1, 4), "BOWL": (3, 6)}
+LOCK_BEFORE_START = timedelta(minutes=1)
+SUBSTITUTE_WEIGHT = Fraction(1, 2)
+CAPTAIN_MULTIPLIER = Fraction(2)
+VICE_MULTIPLIER = Fraction(3, 2)
 
 
-def validate_team(players, captain, vice_captain):
-    """players = list of dicts with keys: id, team, role, credit.
-    Returns a list of error messages. An empty list means the team is valid."""
-    errors = []
-    ids = [p["id"] for p in players]
+def lock_time(match_start):
+    """Entries are accepted up to match start minus 1 minute (included)."""
+    return match_start - LOCK_BEFORE_START
 
-    if len(players) != TEAM_SIZE:
-        errors.append("Team must have exactly 11 players")
-    if len(set(ids)) != len(ids):
-        errors.append("Same player picked twice")
 
-    total = sum((Decimal(str(p["credit"])) for p in players), Decimal("0"))
-    if total > MAX_CREDITS:          # exactly 100.0 is allowed
-        errors.append(f"Credits {total} are more than 100.0")
-
+def validate_team(player_ids, captain, vice_captain, players, match_teams):
+    """players: dict id -> Player. match_teams: the two team codes of the match."""
+    if len(player_ids) != TEAM_SIZE:
+        return "TEAM_SIZE_INVALID"
+    if len(set(player_ids)) != len(player_ids):
+        return "DUPLICATE_PLAYER"
+    if any(pid not in players for pid in player_ids):
+        return "UNKNOWN_PLAYER"
+    chosen = [players[pid] for pid in player_ids]
+    if any(p.team not in match_teams for p in chosen):
+        return "PLAYER_NOT_IN_MATCH"
+    if sum((p.credits for p in chosen), Decimal("0")) > MAX_CREDITS:
+        return "CREDITS_EXCEEDED"       # exactly 100.0 is allowed
     for role, (low, high) in ROLE_LIMITS.items():
-        count = sum(1 for p in players if p["role"] == role)
+        count = sum(1 for p in chosen if p.role == role)
         if count < low or count > high:
-            errors.append(f"{role} count {count} must be between {low} and {high}")
-
-    teams = {}
-    for p in players:
-        teams[p["team"]] = teams.get(p["team"], 0) + 1
-    for team, count in teams.items():
-        if count > MAX_FROM_ONE_TEAM:    # exactly 7 is allowed
-            errors.append(f"{count} players from {team}, maximum is 7")
-
-    if captain == vice_captain:
-        errors.append("Captain and vice-captain must be different")
-    if captain not in ids or vice_captain not in ids:
-        errors.append("Captain and vice-captain must be in the team")
-
-    return errors
+            return "ROLE_LIMIT_VIOLATED"
+    per_team = {}
+    for p in chosen:
+        per_team[p.team] = per_team.get(p.team, 0) + 1
+    if max(per_team.values()) > MAX_FROM_ONE_TEAM:   # exactly 7 is allowed
+        return "TOO_MANY_FROM_ONE_TEAM"
+    if captain == vice_captain or captain not in player_ids or vice_captain not in player_ids:
+        return "CAPTAIN_VICE_INVALID"
+    return None
 
 
-def can_add_entry(existing_entries_of_user):
-    """A user may submit up to 6 teams per contest."""
-    return existing_entries_of_user < MAX_TEAMS_PER_USER
+def substitute_map(lineups):
+    """{listed player id: announced substitute id} for one match."""
+    return {row.substitute_for: row.player_id for row in lineups if row.substitute_for}
 
 
-def entry_open(submit_time, match_start):
-    """Entries are accepted until match start minus 1 minute (included)."""
-    return submit_time <= match_start - timedelta(minutes=1)
+def slot_points(player_id, team_ids, points, substitutes):
+    """Points of one slot before captain / vice-captain multiplier.
+
+    A listed player who was replaced gives 0.5 x the substitute's points,
+    unless the substitute is already in the same team (then 0)."""
+    if player_id in substitutes:
+        sub_id = substitutes[player_id]
+        if sub_id in team_ids:
+            return Fraction(0)
+        return SUBSTITUTE_WEIGHT * points[sub_id].total
+    return points[player_id].total
 
 
-def substitute_slot_points(sub_points, sub_already_in_team):
-    """Points for a slot whose listed player did not play.
-    The announced substitute counts at 0.5 weight.
-    If the substitute is already in the team, this slot gives 0
-    so that the same player is not counted twice (decision D-15)."""
-    if sub_already_in_team:
-        return Decimal("0")
-    return Decimal(str(sub_points)) * Decimal("0.5")
+def team_score(player_ids, captain, vice_captain, points, substitutes):
+    """Sum of 11 slots. The +4 playing-XI bonus is already inside each
+    player's total, so it is added BEFORE the multiplier."""
+    team_ids = set(player_ids)
+    score = Fraction(0)
+    for pid in player_ids:
+        value = slot_points(pid, team_ids, points, substitutes)
+        if pid == captain:
+            value *= CAPTAIN_MULTIPLIER
+        elif pid == vice_captain:
+            value *= VICE_MULTIPLIER
+        score += value
+    return score
