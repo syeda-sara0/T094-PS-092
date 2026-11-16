@@ -56,3 +56,38 @@ scenarios in the sample data.
 6. TDS per user on the increase of cumulative net winnings
 
 See `docs/decision-log.md` for every choice made where the brief was not clear.
+
+## Documents
+- Design document: docs/design.pdf
+- Decision log: docs/decision-log.md
+- Demo video (5 min): <paste link here>
+
+## Edge cases handled
+Expected results are taken from the sample data pack README.
+
+| Case | Expected result |
+|---|---|
+| Credits exactly 100.0 and 7 players from one team | Valid (EN-0005) |
+| Batter with 30 runs off 10 balls | 30 + 4 + 4 + 4 + 6 = 48, plus 4 for the playing XI |
+| Bowler with 2.0 overs at economy 5.0 | +4 (band 5 to 6) |
+| Run-out shared by two fielders in one team | 3 + 3 |
+| Three-way tie on ranks 2, 3 and 4 | One third of 28% of the pool each, residue to the earliest submission |
+| Guaranteed contest with 1 entry | Entrant wins the whole pool, shortfall printed as PLATFORM_SUBSIDY |
+| Cumulative net winnings turn positive | TDS on the whole positive net (USR-0008) |
+| Substitute already in the team | The replaced slot gives 0 (EN-0407) |
+
+All of these are covered by the tests in `tests/`.
+
+## Assumptions
+- Prize pool = the larger of the guaranteed pool and 85% of entry fees.
+- Prizes of ranks with no entrant are shared among the filled ranks in proportion to their percentages.
+- Money is stored exactly (not as floats). Prizes are rounded down to the paisa.
+- Entries that come before their contest is created are rejected as UNKNOWN_CONTEST. We asked 10 SECONDS to confirm this.
+- All other choices are listed in docs/decision-log.md.
+
+## Known limitations
+- Stretch goals (live leaderboard recomputation after each over, multi-match series contests) are not implemented. <edit if this is not true>
+
+## Who did what
+- Syeda Sara Fathima: <your part>
+- Syeda Annam: <your part>
